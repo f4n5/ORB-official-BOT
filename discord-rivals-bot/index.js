@@ -54,6 +54,34 @@ app.use(express.static(path.join(__dirname, 'public')));
 const IS_HTTPS = config.publicUrl.startsWith('https://');
 const SESSION_TTL = 24 * 60 * 60 * 1000;
 
+
+// ---------- Llamadas a la API de Discord ----------
+// Discord exige un User-Agent con este formato; sin él Cloudflare es mucho más agresivo con las IPs de Render.
+const DISCORD_UA = `DiscordBot (${config.publicUrl}, 1.0)`;
+
+async function discordFetch(url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { 'User-Agent': DISCORD_UA, Accept: 'application/json', ...(options.headers || {}) }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    // Cloudflare 1015 / 429: la IP del servidor está limitada temporalmente
+    if (res.status === 429 || res.status === 403 && /cloudflare|error\s*1015/i.test(text)) {
+      const err = new Error('Discord está limitando temporalmente al servidor');
+      err.code = 'RATE_LIMITED';
+      throw err;
+    }
+    // Nunca mostramos el cuerpo crudo (puede ser una página HTML entera)
+    console.error(`[Discord API] ${res.status} en ${url}: ${text.slice(0, 300)}`);
+    const err = new Error(`Discord respondió con error ${res.status}`);
+    err.code = 'DISCORD_API';
+    throw err;
+  }
+  return res;
+}
+
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -206,7 +234,7 @@ app.get('/auth/discord/callback', async (req, res) => {
   }
 
   try {
-    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+    const tokenRes = await discordFetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -218,16 +246,11 @@ app.get('/auth/discord/callback', async (req, res) => {
       })
     });
 
-    if (!tokenRes.ok) {
-      const t = await tokenRes.text();
-      throw new Error(`Token error: ${t}`);
-    }
     const tokens = await tokenRes.json();
 
-    const userRes = await fetch('https://discord.com/api/users/@me', {
+    const userRes = await discordFetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${tokens.access_token}` }
     });
-    if (!userRes.ok) throw new Error(`No pude leer tu usuario de Discord (${userRes.status})`);
     const user = await userRes.json();
 
     setSessionCookie(res, createWebSession(user));
@@ -256,7 +279,15 @@ app.get('/auth/discord/callback', async (req, res) => {
        <p>${result.dmSent ? '📩 También te enviamos un mensaje directo con estas instrucciones.' : ''}</p>
        <a class="btn" href="${esc(result.messageUrl)}">Volver a Discord</a>`, { color: '#57F287' }));
   } catch (err) {
-    console.error('Discord OAuth error:', err);
+    console.error('Discord OAuth error:', err.message);
+    if (err.code === 'RATE_LIMITED') {
+      const retryUrl = `/auth/discord${intent === 'tryout' ? '?intent=tryout' : ''}`;
+      return res.status(503).send(statusPage('Intenta de nuevo',
+        `<h2>⏳ Discord está ocupado</h2>
+         <p>Discord limitó temporalmente al servidor del bot. No es culpa tuya.</p>
+         <p>Espera <strong>1–2 minutos</strong> y vuelve a intentarlo. <strong>No pulses el botón varias veces seguidas</strong>: eso alarga el bloqueo.</p>
+         <a class="btn" href="${retryUrl}">Reintentar</a>`, { color: '#FEE75C' }));
+    }
     res.status(500).send(statusPage('Error',
       `<h2>Error al iniciar sesión</h2><p>${esc(err.message)}</p><a class="btn" href="/">Volver</a>`, { color: '#ed4245' }));
   }
