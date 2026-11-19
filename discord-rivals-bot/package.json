@@ -1,0 +1,20 @@
+{
+  "name": "crypt3d-bot",
+  "version": "1.1.0",
+  "description": "Crypt3d Discord bot — CAPTCHA verify, /app-link for desktop app, AutoMod, levels",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "register": "node register-commands.js",
+    "postinstall": "echo Dependencies installed. Run: npm run register && npm start"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "node-fetch": "^2.7.0"
+  }
+}
