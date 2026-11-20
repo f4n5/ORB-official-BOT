@@ -60,13 +60,18 @@ const SESSION_TTL = 24 * 60 * 60 * 1000;
 // ---------- Llamadas a la API de Discord ----------
 // Discord exige un User-Agent con este formato; sin él Cloudflare es mucho más agresivo con las IPs de Render.
 const DISCORD_UA = `DiscordBot (${config.publicUrl}, 1.0)`;
+const CF_PROXY_URL = (process.env.CLOUDFLARE_PROXY_URL || '').replace(/\/+$/, '');
 
 async function discordFetch(url, options = {}, attempt = 0) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
+  const targetUrl = CF_PROXY_URL
+    ? `${CF_PROXY_URL}/?url=${encodeURIComponent(url)}`
+    : url;
+
   let res;
   try {
-    res = await fetch(url, {
+    res = await fetch(targetUrl, {
       ...options,
       signal: controller.signal,
       headers: { 'User-Agent': DISCORD_UA, Accept: 'application/json', ...(options.headers || {}) }
@@ -102,7 +107,7 @@ async function discordFetch(url, options = {}, attempt = 0) {
 }
 
 function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": ''' }[c]));
 }
 
 function parseCookies(req) {
