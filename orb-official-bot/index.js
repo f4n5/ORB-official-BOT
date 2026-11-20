@@ -107,7 +107,13 @@ async function discordFetch(url, options = {}, attempt = 0) {
 }
 
 function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": ''' }[c]));
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&',
+    '<': '<',
+    '>': '>',
+    '"': '"',
+    "'": '''
+  }[c]));
 }
 
 function parseCookies(req) {
