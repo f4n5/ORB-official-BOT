@@ -23,7 +23,6 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildModeration
   ],
-  // Partials.Message → permite revisar mensajes editados que no estaban en caché
   partials: [Partials.Channel, Partials.Message]
 });
 
@@ -46,7 +45,7 @@ for (const file of fs.readdirSync(eventsPath).filter(f => f.endsWith('.js'))) {
 
 // ===================== EXPRESS =====================
 const app = express();
-app.set('trust proxy', 1); // Render está detrás de un proxy
+app.set('trust proxy', 1);
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.disable('x-powered-by');
@@ -56,9 +55,7 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 const IS_HTTPS = config.publicUrl.startsWith('https://');
 const SESSION_TTL = 24 * 60 * 60 * 1000;
 
-
 // ---------- Llamadas a la API de Discord ----------
-// Discord exige un User-Agent con este formato; sin él Cloudflare es mucho más agresivo con las IPs de Render.
 const DISCORD_UA = `DiscordBot (${config.publicUrl}, 1.0)`;
 const CF_PROXY_URL = (process.env.CLOUDFLARE_PROXY_URL || '').replace(/\/+$/, '');
 
@@ -88,7 +85,6 @@ async function discordFetch(url, options = {}, attempt = 0) {
     const text = await res.text();
     const limited = res.status === 429 || (res.status === 403 && /cloudflare|error\s*1015/i.test(text));
     if (limited) {
-      // Reintento único si Discord pide esperar poco (429 normal). Un bloqueo de Cloudflare (1015) no se reintenta.
       const wait = Number(res.headers.get('retry-after'));
       if (res.status === 429 && attempt < 1 && wait > 0 && wait <= 3) {
         await new Promise(r => setTimeout(r, wait * 1000 + 100));
@@ -106,14 +102,17 @@ async function discordFetch(url, options = {}, attempt = 0) {
   return res;
 }
 
+const AMP = String.fromCharCode(38);
+const ESC_MAP = {
+  38: AMP + 'amp;',
+  60: AMP + 'lt;',
+  62: AMP + 'gt;',
+  34: AMP + 'quot;',
+  39: AMP + '#39;'
+};
+
 function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({
-    '&': '&',
-    '<': '<',
-    '>': '>',
-    '"': '"',
-    "'": '''
-  }[c]));
+  return String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c.charCodeAt(0)] || c);
 }
 
 function parseCookies(req) {
@@ -129,7 +128,6 @@ function parseCookies(req) {
   return list;
 }
 
-// ---------- Sesión web SIN estado (cookie firmada) → sobrevive a reinicios de Render ----------
 function createWebSession(user) {
   return signToken('session', { id: user.id, u: user.username, a: user.avatar || null }, SESSION_TTL);
 }
@@ -152,7 +150,6 @@ function avatarUrl(session) {
     : 'https://cdn.discordapp.com/embed/avatars/0.png';
 }
 
-// ---------- Plantilla simple para páginas de estado ----------
 function statusPage(title, bodyHtml, { color = '#5865F2' } = {}) {
   return `<!DOCTYPE html>
 <html lang="es">
@@ -175,15 +172,12 @@ function statusPage(title, bodyHtml, { color = '#5865F2' } = {}) {
 </html>`;
 }
 
-// Se registra ANTES del resto: responde al instante aunque el bot aún esté conectando
 app.get('/ping', (req, res) => res.status(200).send('pong'));
 app.get('/health', (req, res) => res.json({ ok: true, bot: client.isReady(), uptime: Math.round(process.uptime()), ping: client.ws.ping }));
 
-// ========== API PARA ORBSTRAP (app de escritorio) ==========
 const appApi = require('./routes/app')({ client, statusPage, esc });
 app.use(appApi.router);
 
-// ========== HOME ==========
 app.get('/', (req, res) => {
   const session = getWebSession(req);
   res.send(`
@@ -235,11 +229,8 @@ app.get('/', (req, res) => {
   `);
 });
 
-// ========== DISCORD OAUTH ==========
-// ?intent=tryout  → al volver de Discord se notifica automáticamente a Owner/Admin
 app.get('/auth/discord', (req, res) => {
   const intent = req.query.intent === 'tryout' ? 'tryout' : null;
-  // "state" firmado: protege el login (CSRF) y recuerda la intención sin guardar nada en memoria
   const state = signToken('oauth', { intent }, 10 * 60 * 1000);
 
   const params = new URLSearchParams({
@@ -260,7 +251,7 @@ app.get('/auth/discord/callback', async (req, res) => {
   }
 
   let intent = null;
-  let loginCode = null; // intent 'app': código del login iniciado desde ORBstrap
+  let loginCode = null;
   if (state) {
     const st = verifyToken(String(state), 'oauth');
     if (!st.ok) {
@@ -292,7 +283,6 @@ app.get('/auth/discord/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    // Login iniciado desde la app ORBstrap: comprobar servidor + verificación y avisar a la app
     if (intent === 'app') {
       const r = await appApi.finishLogin(loginCode, user);
       return res.status(r.status).send(r.html);
@@ -302,7 +292,6 @@ app.get('/auth/discord/callback', async (req, res) => {
 
     if (intent !== 'tryout') return res.redirect('/dashboard');
 
-    // ---- Botón de /tryout-setup: notificar a Owner/Admin y al usuario ----
     const result = await notifyTryout(client, { discordId: user.id, username: user.username });
 
     if (!result.ok) {
@@ -349,7 +338,6 @@ app.get('/logout', (req, res) => {
   res.redirect('/');
 });
 
-// ========== DASHBOARD + HACER PRUEBAS ==========
 app.get('/dashboard', (req, res) => {
   const session = getWebSession(req);
   if (!session) return res.redirect('/');
@@ -454,7 +442,6 @@ app.post('/api/solicitar-pruebas', async (req, res) => {
   }
 });
 
-// ========== CAPTCHA (verificación Discord) ==========
 function tokenErrorPage(reason) {
   const expired = reason === 'expired';
   return statusPage(expired ? 'Enlace expirado' : 'Enlace inválido',
@@ -555,9 +542,6 @@ app.listen(PORT, () => {
   console.log(`   Dashboard:  ${config.publicUrl}/`);
 });
 
-// Keep-alive: Render (plan gratis) duerme el servicio tras ~15 min sin visitas -> la primera visita tarda ~30-60 s
-// (por eso el CAPTCHA web "cargaba lento"). Se hace ping cada 4 min a la URL pública.
-// Recomendado además: UptimeRobot/cron-job.org apuntando a /ping (así despierta aunque el proceso se duerma).
 const KEEPALIVE_URL = process.env.RENDER_EXTERNAL_URL || config.publicUrl;
 if (/^https:\/\//.test(KEEPALIVE_URL)) {
   setInterval(() => {
@@ -565,9 +549,6 @@ if (/^https:\/\//.test(KEEPALIVE_URL)) {
   }, 4 * 60 * 1000).unref();
 }
 
-// Login con reintentos y espera creciente.
-// ANTES: process.exit(1) -> Render reiniciaba el servicio en bucle y cada reinicio hacía un login nuevo,
-// lo que hace que Discord/Cloudflare marque (ban 1015) la IP de Render y nadie pueda iniciar sesión.
 async function loginWithRetry() {
   let delay = 30 * 1000;
   for (;;) {
